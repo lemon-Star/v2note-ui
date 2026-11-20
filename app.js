@@ -267,7 +267,7 @@ function renderSidebar() {
 
 function renderCategoryTabs() {
   const container = document.getElementById('category-tabs');
-  container.innerHTML = state.categories.map(cat => `
+  const tabsHtml = state.categories.map(cat => `
     <a href="javascript:void(0)" 
        class="tab-item ${state.activeCategory === cat.id ? 'active' : ''}" 
        data-cat="${escapeHtml(cat.id)}">
@@ -275,8 +275,39 @@ function renderCategoryTabs() {
     </a>
   `).join('');
 
+  container.innerHTML = tabsHtml + `
+    <a href="javascript:void(0)" class="tab-manage-btn" data-open-cat-manager="true" title="新建、修改或删除顶部大类">
+      ⚙️ 管理大类
+    </a>
+  `;
+
   const currentCat = state.categories.find(c => c.id === state.activeCategory) || state.categories[0];
   document.getElementById('current-category-desc').textContent = currentCat ? currentCat.desc : '';
+}
+
+function renderCategoryManagerModal() {
+  const listEl = document.getElementById('cat-manage-list');
+  const realCats = state.categories.filter(c => c.id !== 'all');
+  if (realCats.length === 0) {
+    listEl.innerHTML = `<div class="empty-state" style="padding: 20px;">暂无自定义大类，请在上方新建。</div>`;
+    return;
+  }
+
+  listEl.innerHTML = realCats.map(cat => {
+    const count = state.topics.filter(t => t.category === cat.id).length;
+    return `
+      <div class="cat-manage-item">
+        <div class="cat-manage-info">
+          <div class="cat-manage-name">${escapeHtml(cat.name)} <span style="font-weight:normal;color:#999;font-size:12px;">(${count} 篇帖子)</span></div>
+          <div class="cat-manage-desc">${escapeHtml(cat.desc || '')}</div>
+        </div>
+        <div class="cat-manage-actions">
+          <button class="btn btn-sm" data-edit-cat="${escapeHtml(cat.id)}">修改</button>
+          <button class="btn btn-sm danger-text" data-del-cat="${escapeHtml(cat.id)}">删除</button>
+        </div>
+      </div>
+    `;
+  }).join('');
 }
 
 function renderTopicList() {
@@ -401,7 +432,7 @@ function bindEvents() {
   });
 
   // Category Tabs Click (Event delegation)
-  document.addEventListener('click', (e) => {
+  document.addEventListener('click', async (e) => {
     const catEl = e.target.closest('[data-cat]');
     if (catEl) {
       state.activeCategory = catEl.dataset.cat;
@@ -426,6 +457,91 @@ function bindEvents() {
     const closeModalEl = e.target.closest('[data-close]');
     if (closeModalEl) {
       document.getElementById(closeModalEl.dataset.close).classList.add('hidden');
+      return;
+    }
+
+    // Open Category Manager Modal
+    const openCatMgrEl = e.target.closest('[data-open-cat-manager]');
+    if (openCatMgrEl) {
+      renderCategoryManagerModal();
+      document.getElementById('modal-categories').classList.remove('hidden');
+      return;
+    }
+
+    // Edit / Rename Category
+    const editCatEl = e.target.closest('[data-edit-cat]');
+    if (editCatEl) {
+      const oldName = editCatEl.dataset.editCat;
+      const catObj = state.categories.find(c => c.id === oldName);
+      if (!catObj) return;
+
+      const newNameInput = prompt(`修改大类「${oldName}」的名称：`, catObj.name);
+      if (newNameInput === null) return;
+      const newName = newNameInput.trim();
+      if (!newName) return;
+
+      const newDescInput = prompt(`修改大类「${newName}」的描述：`, catObj.desc || '');
+      const newDesc = newDescInput !== null ? newDescInput.trim() : catObj.desc;
+
+      if (newName !== oldName && state.categories.some(c => c.id === newName)) {
+        alert('该大类名称已存在！');
+        return;
+      }
+
+      if (isGitHubConfigured()) {
+        try {
+          await ghFetch(`/labels/${encodeURIComponent(oldName)}`, {
+            method: 'PATCH',
+            body: JSON.stringify({
+              new_name: newName,
+              description: newDesc
+            })
+          });
+        } catch (err) {
+          alert(`GitHub 同步修改分类失败: ${err.message}`);
+          return;
+        }
+      }
+
+      catObj.id = newName;
+      catObj.name = newName;
+      catObj.desc = newDesc;
+      state.topics.forEach(t => {
+        if (t.category === oldName) t.category = newName;
+      });
+      if (state.activeCategory === oldName) state.activeCategory = newName;
+
+      saveLocalData();
+      renderCategoryManagerModal();
+      renderAll();
+      return;
+    }
+
+    // Delete Category
+    const delCatEl = e.target.closest('[data-del-cat]');
+    if (delCatEl) {
+      const catName = delCatEl.dataset.delCat;
+      const count = state.topics.filter(t => t.category === catName).length;
+      if (!confirm(`确定要删除大类「${catName}」吗？（该分类下现有 ${count} 篇帖子，删除大类不会删除帖子本身）`)) {
+        return;
+      }
+
+      if (isGitHubConfigured()) {
+        try {
+          await ghFetch(`/labels/${encodeURIComponent(catName)}`, {
+            method: 'DELETE'
+          });
+        } catch (err) {
+          console.warn('GitHub label delete warning:', err.message);
+        }
+      }
+
+      state.categories = state.categories.filter(c => c.id !== catName);
+      if (state.activeCategory === catName) state.activeCategory = 'all';
+      saveLocalData();
+      renderCategoryManagerModal();
+      renderAll();
+      return;
     }
   });
 
@@ -447,39 +563,60 @@ function bindEvents() {
     }
   });
 
-  // Add Category
-  document.getElementById('btn-add-category').addEventListener('click', async () => {
-    const name = prompt('请输入新增的大类名称（例如：读书笔记、AI折腾、理财）：');
-    if (!name || !name.trim()) return;
-    const clean = name.trim();
+  // Open Category Manager Modal from Sidebar button
+  document.getElementById('btn-manage-categories').addEventListener('click', () => {
+    renderCategoryManagerModal();
+    document.getElementById('modal-categories').classList.remove('hidden');
+  });
+
+  // Create New Category inside Category Manager Modal
+  document.getElementById('btn-create-cat').addEventListener('click', async () => {
+    const nameInput = document.getElementById('new-cat-name');
+    const descInput = document.getElementById('new-cat-desc');
+    const clean = nameInput.value.trim();
+    const desc = descInput.value.trim() || `${clean} 分类下的所有帖子与记录`;
+
+    if (!clean) {
+      alert('请输入新大类的名称');
+      return;
+    }
     if (state.categories.some(c => c.id === clean)) {
       alert('该分类已存在！');
       return;
     }
 
-    if (isGitHubConfigured()) {
-      try {
+    const btn = document.getElementById('btn-create-cat');
+    btn.disabled = true;
+    btn.textContent = '创建中...';
+
+    try {
+      if (isGitHubConfigured()) {
         await ghFetch('/labels', {
           method: 'POST',
           body: JSON.stringify({
             name: clean,
             color: '333344',
-            description: `${clean} 分类下的所有帖子与记录`
+            description: desc
           })
         });
-      } catch (err) {
-        console.warn('GitHub label creation info:', err.message);
       }
-    }
 
-    state.categories.push({
-      id: clean,
-      name: clean,
-      desc: `${clean} 分类下的所有帖子与记录`
-    });
-    state.activeCategory = clean;
-    saveLocalData();
-    renderAll();
+      state.categories.push({
+        id: clean,
+        name: clean,
+        desc
+      });
+      nameInput.value = '';
+      descInput.value = '';
+      saveLocalData();
+      renderCategoryManagerModal();
+      renderAll();
+    } catch (err) {
+      alert(`创建分类失败: ${err.message}`);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '+ 新建大类';
+    }
   });
 
   // Open New Topic Modal
