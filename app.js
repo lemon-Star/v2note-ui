@@ -417,7 +417,11 @@ function renderDetailView() {
             <span class="meta-author">${escapeHtml(rec.author || topic.author || 'me')}</span> · 
             <span>记录于 ${formatTimeAgo(rec.createdAt)} (${new Date(rec.createdAt).toLocaleString()})</span>
           </div>
-          <span class="reply-floor">#${idx + 1}</span>
+          <div class="reply-meta-right">
+            <a href="javascript:void(0)" class="reply-action-link" data-edit-record="${rec.id}" data-floor="${idx + 1}">✏️ 修改</a>
+            <a href="javascript:void(0)" class="reply-action-link danger-text" data-del-record="${rec.id}" data-floor="${idx + 1}">🗑️ 删除</a>
+            <span class="reply-floor">#${idx + 1}</span>
+          </div>
         </div>
         <div class="reply-content markdown-body">
           ${renderMarkdown(rec.body)}
@@ -502,6 +506,50 @@ function bindEvents() {
       const replacement = `\n\`\`\`bash\n${selected}\n\`\`\`\n`;
       textarea.value = textarea.value.substring(0, start) + replacement + textarea.value.substring(end);
       textarea.focus();
+      return;
+    }
+
+    // Edit Floor Record (Comment)
+    const editRecordBtn = e.target.closest('[data-edit-record]');
+    if (editRecordBtn) {
+      const recId = editRecordBtn.dataset.editRecord;
+      const floor = editRecordBtn.dataset.floor;
+      const topic = state.topics.find(t => String(t.id) === String(state.activeTopicId));
+      if (!topic || !topic.records) return;
+      const rec = topic.records.find(r => String(r.id) === String(recId));
+      if (!rec) return;
+
+      state.editingTarget = { type: 'record', recordId: rec.id };
+      document.getElementById('edit-modal-header').textContent = `修改 #${floor} 楼层记录`;
+      document.getElementById('edit-title-group').classList.add('hidden');
+      document.getElementById('edit-content-body').value = rec.body || '';
+      document.getElementById('modal-edit-content').classList.remove('hidden');
+      document.getElementById('edit-content-body').focus();
+      return;
+    }
+
+    // Delete Floor Record (Comment)
+    const delRecordBtn = e.target.closest('[data-del-record]');
+    if (delRecordBtn) {
+      const recId = delRecordBtn.dataset.delRecord;
+      const floor = delRecordBtn.dataset.floor;
+      const topic = state.topics.find(t => String(t.id) === String(state.activeTopicId));
+      if (!topic || !topic.records) return;
+      if (!confirm(`确定要删除 #${floor} 楼的这条记录吗？`)) return;
+
+      try {
+        if (isGitHubConfigured() && topic.ghNumber) {
+          await ghFetch(`/issues/comments/${recId}`, {
+            method: 'DELETE'
+          });
+        }
+        topic.records = topic.records.filter(r => String(r.id) !== String(recId));
+        topic.commentsCount = topic.records.length;
+        saveLocalData();
+        renderAll();
+      } catch (err) {
+        alert(`删除楼层记录失败: ${err.message}`);
+      }
       return;
     }
 
@@ -799,6 +847,78 @@ function bindEvents() {
   document.getElementById('reply-input').addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       submitReply();
+    }
+  });
+
+  // Edit Main Topic (Title & Body)
+  document.getElementById('btn-edit-topic').addEventListener('click', () => {
+    const topic = state.topics.find(t => String(t.id) === String(state.activeTopicId));
+    if (!topic) return;
+
+    state.editingTarget = { type: 'topic', topicId: topic.id };
+    document.getElementById('edit-modal-header').textContent = '修改主贴标题与内容';
+    document.getElementById('edit-title-group').classList.remove('hidden');
+    document.getElementById('edit-content-title').value = topic.title || '';
+    document.getElementById('edit-content-body').value = topic.body || '';
+    document.getElementById('modal-edit-content').classList.remove('hidden');
+    document.getElementById('edit-content-body').focus();
+  });
+
+  // Save Edit (Either Main Topic or Floor Record)
+  document.getElementById('btn-save-edit-content').addEventListener('click', async () => {
+    const target = state.editingTarget;
+    if (!target) return;
+
+    const topic = state.topics.find(t => String(t.id) === String(state.activeTopicId));
+    if (!topic) return;
+
+    const newBody = document.getElementById('edit-content-body').value.trim();
+    const btn = document.getElementById('btn-save-edit-content');
+    btn.disabled = true;
+    btn.textContent = '保存中...';
+
+    try {
+      if (target.type === 'topic') {
+        const newTitle = document.getElementById('edit-content-title').value.trim();
+        if (!newTitle) {
+          alert('帖子标题不能为空');
+          return;
+        }
+        if (isGitHubConfigured() && topic.ghNumber) {
+          await ghFetch(`/issues/${topic.ghNumber}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ title: newTitle, body: newBody })
+          });
+        }
+        topic.title = newTitle;
+        topic.body = newBody;
+        topic.updatedAt = new Date().toISOString();
+      } else if (target.type === 'record') {
+        if (!newBody) {
+          alert('记录内容不能为空');
+          return;
+        }
+        const rec = (topic.records || []).find(r => String(r.id) === String(target.recordId));
+        if (!rec) return;
+
+        if (isGitHubConfigured() && topic.ghNumber) {
+          await ghFetch(`/issues/comments/${rec.id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ body: newBody })
+          });
+        }
+        rec.body = newBody;
+        topic.updatedAt = new Date().toISOString();
+      }
+
+      saveLocalData();
+      document.getElementById('modal-edit-content').classList.add('hidden');
+      renderAll();
+    } catch (err) {
+      alert(`保存修改失败: ${err.message}`);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '保存修改';
     }
   });
 

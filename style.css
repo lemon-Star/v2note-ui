@@ -476,6 +476,23 @@ a:hover {
   color: var(--text-muted);
 }
 
+.reply-meta-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.reply-action-link {
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.reply-action-link:hover {
+  color: #111;
+  text-decoration: underline;
+}
+
 .reply-floor {
   background-color: #f0f0f0;
   color: #888;
