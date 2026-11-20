@@ -471,6 +471,40 @@ function bindEvents() {
       return;
     }
 
+    // One-Click Copy Code Block
+    const copyBtn = e.target.closest('[data-copy-code]');
+    if (copyBtn) {
+      const code = decodeURIComponent(copyBtn.dataset.copyCode);
+      try {
+        await navigator.clipboard.writeText(code);
+        const origText = copyBtn.textContent;
+        copyBtn.textContent = '✓ 已复制!';
+        copyBtn.classList.add('copied');
+        setTimeout(() => {
+          copyBtn.textContent = origText;
+          copyBtn.classList.remove('copied');
+        }, 1800);
+      } catch (err) {
+        alert('复制失败，请手动选中复制');
+      }
+      return;
+    }
+
+    // Toolbar: Insert ``` Code Fence
+    const insertCodeBtn = e.target.closest('[data-insert-code]');
+    if (insertCodeBtn) {
+      const targetId = insertCodeBtn.dataset.insertCode;
+      const textarea = document.getElementById(targetId);
+      if (!textarea) return;
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const selected = textarea.value.substring(start, end) || '在这里粘贴你的命令或代码';
+      const replacement = `\n\`\`\`bash\n${selected}\n\`\`\`\n`;
+      textarea.value = textarea.value.substring(0, start) + replacement + textarea.value.substring(end);
+      textarea.focus();
+      return;
+    }
+
     // Open Category Manager Modal
     const openCatMgrEl = e.target.closest('[data-open-cat-manager]');
     if (openCatMgrEl) {
@@ -825,15 +859,90 @@ function bindEvents() {
 }
 
 // ==========================================
-// Lightweight Built-in Markdown Renderer (Zero CDN Dependency)
+// Lightweight Built-in Markdown Renderer (With One-Click Copy & Auto-Command Detection)
 // ==========================================
+function makeCodeBlockHtml(rawCode, lang = 'bash') {
+  const cleanCode = rawCode.trim();
+  const encoded = encodeURIComponent(cleanCode);
+  return `<div class="code-block-wrapper"><div class="code-block-header"><span>${escapeHtml(lang || 'shell')}</span><button type="button" class="btn-copy-code" data-copy-code="${encoded}">📋 复制代码</button></div><pre><code>${escapeHtml(cleanCode)}</code></pre></div>`;
+}
+
+function autoWrapUnfencedCommands(text) {
+  // Automatically detect contiguous shell command blocks even if user forgot ``` fences
+  const lines = text.split('\n');
+  const result = [];
+  let cmdBuffer = [];
+
+  const isCommandLine = (line) => {
+    const t = line.trim();
+    if (!t) return false;
+    return (
+      /^(\.\/|\/|cd\s|export\s|mkdir\s|scp\s|ssh\s|curl\s|wget\s|git\s|docker\s|python|pip\s|npm\s|node\s|sudo\s|cat\s|ls\s|rm\s|cp\s|mv\s|chmod\s|chown\s|systemctl\s|journalctl\s|nvidia-smi|--[a-zA-Z0-9_-]+)/.test(t) ||
+      /^[a-zA-Z0-9_]+\s*=\s*\S+/.test(t) ||
+      /^#\s+/.test(t) ||
+      t.endsWith('\\')
+    );
+  };
+
+  let insideFence = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim().startsWith('```')) {
+      if (cmdBuffer.length > 0) {
+        result.push('```bash\n' + cmdBuffer.join('\n') + '\n```');
+        cmdBuffer = [];
+      }
+      insideFence = !insideFence;
+      result.push(line);
+      continue;
+    }
+
+    if (insideFence) {
+      result.push(line);
+      continue;
+    }
+
+    if (isCommandLine(line)) {
+      cmdBuffer.push(line);
+    } else if (line.trim() === '' && cmdBuffer.length > 0) {
+      // Flush each command paragraph as its own copyable block!
+      result.push('```bash\n' + cmdBuffer.join('\n') + '\n```');
+      cmdBuffer = [];
+      result.push(line);
+    } else {
+      if (cmdBuffer.length > 0) {
+        result.push('```bash\n' + cmdBuffer.join('\n') + '\n```');
+        cmdBuffer = [];
+      }
+      result.push(line);
+    }
+  }
+
+  if (cmdBuffer.length > 0) {
+    result.push('```bash\n' + cmdBuffer.join('\n') + '\n```');
+  }
+
+  return result.join('\n');
+}
+
 function renderMarkdown(text) {
   if (!text) return '';
-  let html = escapeHtml(text);
 
-  // Code blocks ```code```
-  html = html.replace(/```([\s\S]*?)```/g, (_, code) => `<pre><code>${code.trim()}</code></pre>`);
-  // Inline code `code`
+  // 1. Pre-process: auto-wrap shell commands if user pasted without ```
+  const preprocessed = autoWrapUnfencedCommands(text);
+
+  // 2. Extract fenced code blocks ```lang ... ``` into placeholders first
+  const codeBlocks = [];
+  let processed = preprocessed.replace(/```([a-zA-Z0-9_-]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const idx = codeBlocks.length;
+    codeBlocks.push(makeCodeBlockHtml(code, lang || 'bash'));
+    return `@@CODE_BLOCK_${idx}@@`;
+  });
+
+  // 3. Escape remaining HTML
+  let html = escapeHtml(processed);
+
+  // 4. Inline code `code`
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
   // Headings
   html = html.replace(/^### (.*$)/gm, '<h3>$1</h3>');
@@ -841,13 +950,16 @@ function renderMarkdown(text) {
   html = html.replace(/^# (.*$)/gm, '<h1>$1</h1>');
   // Bold & Italic
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
   // Blockquote
   html = html.replace(/^&gt; (.*$)/gm, '<blockquote>$1</blockquote>');
-  // Links [text](url)
+  // Markdown Links [text](url) & Auto bare URLs
   html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  html = html.replace(/(^|[^"'>])(https?:\/\/[^\s<]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
   // Line breaks
   html = html.replace(/\n/g, '<br>');
+
+  // 5. Restore code blocks
+  html = html.replace(/@@CODE_BLOCK_(\d+)@@/g, (_, idx) => codeBlocks[Number(idx)]);
 
   return html;
 }

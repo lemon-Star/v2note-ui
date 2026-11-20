@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>V2Note - 个人极简知识库 & 记录</title>
-  <link rel="stylesheet" href="style.css?v=2">
+  <link rel="stylesheet" href="style.css?v=3">
 </head>
 <body>
   <!-- Top Header -->
@@ -90,10 +90,13 @@
         <div class="box reply-form-box">
           <div class="box-header">
             <span>添加一条新记录（附言 / 进展跟进）</span>
-            <span class="box-header-right">支持 Markdown 语法</span>
+            <span class="box-header-right">支持 Markdown 语法 & 自动识别命令行</span>
           </div>
           <div class="form-body">
-            <textarea id="reply-input" rows="5" placeholder="记录新的进展、排错过程、笔记补充或答案... (Ctrl+Enter 快捷提交)"></textarea>
+            <div class="editor-toolbar">
+              <button type="button" class="btn-toolbar" data-insert-code="reply-input">{ } 插入代码块 (```)</button>
+            </div>
+            <textarea id="reply-input" rows="6" placeholder="记录新的进展、排错过程、笔记补充或命令... (直接粘贴命令也会自动变成可复制代码块，Ctrl+Enter 快捷提交)"></textarea>
             <div class="form-actions">
               <span class="form-tip">每一条记录都会作为独立楼层带时间戳保存</span>
               <button id="btn-submit-reply" class="btn btn-primary">追加记录</button>
@@ -177,8 +180,11 @@
           <input type="text" id="new-topic-title" class="form-control" placeholder="请输入简明扼要的标题..." />
         </div>
         <div class="form-group">
-          <label>初始正文 / 背景描述 (支持 Markdown)</label>
-          <textarea id="new-topic-body" rows="7" class="form-control" placeholder="写下你的问题、项目初始记录或思考... 后续进展可以在帖子下方随时盖楼追加。"></textarea>
+          <label>初始正文 / 背景描述 (支持 Markdown & 自动识别命令行)</label>
+          <div class="editor-toolbar">
+            <button type="button" class="btn-toolbar" data-insert-code="new-topic-body">{ } 插入代码块 (```)</button>
+          </div>
+          <textarea id="new-topic-body" rows="7" class="form-control" placeholder="写下你的问题、项目初始记录或命令... 后续进展可以在帖子下方随时盖楼追加。"></textarea>
         </div>
         <div class="form-actions">
           <button class="btn" data-close="modal-new-topic">取消</button>
@@ -254,6 +260,6 @@
     </div>
   </footer>
 
-  <script src="app.js?v=2"></script>
+  <script src="app.js?v=3"></script>
 </body>
 </html>
