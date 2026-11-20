@@ -89,8 +89,22 @@ function loadLocalData() {
   const savedTopics = localStorage.getItem(STORAGE_KEYS.TOPICS);
   state.topics = savedTopics ? JSON.parse(savedTopics) : INITIAL_DEMO_TOPICS;
 
-  const savedGh = localStorage.getItem(STORAGE_KEYS.GH_CONFIG);
-  state.ghConfig = savedGh ? JSON.parse(savedGh) : { owner: 'lemon-Star', repo: 'v2note', token: '' };
+  // Auto-connect if URL has ?token=ghp_xxx
+  const urlParams = new URLSearchParams(window.location.search);
+  const urlToken = urlParams.get('token');
+  if (urlToken) {
+    state.ghConfig = {
+      owner: urlParams.get('owner') || 'lemon-Star',
+      repo: urlParams.get('repo') || 'v2note',
+      token: urlToken.trim()
+    };
+    localStorage.setItem(STORAGE_KEYS.GH_CONFIG, JSON.stringify(state.ghConfig));
+    // Clean URL so token isn't exposed in address bar
+    window.history.replaceState({}, document.title, window.location.pathname);
+  } else {
+    const savedGh = localStorage.getItem(STORAGE_KEYS.GH_CONFIG);
+    state.ghConfig = savedGh ? JSON.parse(savedGh) : { owner: 'lemon-Star', repo: 'v2note', token: '' };
+  }
 }
 
 function saveLocalData() {
@@ -130,7 +144,22 @@ async function syncFromGitHub() {
   statusEl.textContent = '同步 GitHub 中...';
 
   try {
-    // Fetch issues (excluding pull requests)
+    // 1. Fetch all labels from repo as categories
+    const defaultGhLabels = ['bug', 'documentation', 'duplicate', 'enhancement', 'good first issue', 'help wanted', 'invalid', 'question', 'wontfix'];
+    const labels = await ghFetch('/labels?per_page=100');
+    const customLabels = labels.filter(lb => !defaultGhLabels.includes(lb.name.toLowerCase()));
+    if (customLabels.length > 0) {
+      state.categories = [
+        { id: 'all', name: '全部', desc: '所有分类下的最新记录与帖子' },
+        ...customLabels.map(lb => ({
+          id: lb.name,
+          name: lb.name,
+          desc: lb.description || `${lb.name} 分类下的所有帖子与记录`
+        }))
+      ];
+    }
+
+    // 2. Fetch issues (excluding pull requests)
     const issues = await ghFetch('/issues?state=open&per_page=100&sort=updated');
     const pureIssues = issues.filter(item => !item.pull_request);
 
@@ -419,7 +448,7 @@ function bindEvents() {
   });
 
   // Add Category
-  document.getElementById('btn-add-category').addEventListener('click', () => {
+  document.getElementById('btn-add-category').addEventListener('click', async () => {
     const name = prompt('请输入新增的大类名称（例如：读书笔记、AI折腾、理财）：');
     if (!name || !name.trim()) return;
     const clean = name.trim();
@@ -427,6 +456,22 @@ function bindEvents() {
       alert('该分类已存在！');
       return;
     }
+
+    if (isGitHubConfigured()) {
+      try {
+        await ghFetch('/labels', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: clean,
+            color: '333344',
+            description: `${clean} 分类下的所有帖子与记录`
+          })
+        });
+      } catch (err) {
+        console.warn('GitHub label creation info:', err.message);
+      }
+    }
+
     state.categories.push({
       id: clean,
       name: clean,
