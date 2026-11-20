@@ -71,7 +71,10 @@ let state = {
 };
 
 // Initialize App
+let initialized = false;
 function init() {
+  if (initialized) return;
+  initialized = true;
   loadLocalData();
   bindEvents();
   renderAll();
@@ -83,11 +86,19 @@ function init() {
 }
 
 function loadLocalData() {
-  const savedCats = localStorage.getItem(STORAGE_KEYS.CATEGORIES);
-  state.categories = savedCats ? JSON.parse(savedCats) : DEFAULT_CATEGORIES;
+  try {
+    const savedCats = JSON.parse(localStorage.getItem(STORAGE_KEYS.CATEGORIES));
+    state.categories = (Array.isArray(savedCats) && savedCats.length > 0) ? savedCats : DEFAULT_CATEGORIES;
+  } catch (e) {
+    state.categories = DEFAULT_CATEGORIES;
+  }
 
-  const savedTopics = localStorage.getItem(STORAGE_KEYS.TOPICS);
-  state.topics = savedTopics ? JSON.parse(savedTopics) : INITIAL_DEMO_TOPICS;
+  try {
+    const savedTopics = JSON.parse(localStorage.getItem(STORAGE_KEYS.TOPICS));
+    state.topics = (Array.isArray(savedTopics) && savedTopics.length > 0) ? savedTopics : INITIAL_DEMO_TOPICS;
+  } catch (e) {
+    state.topics = INITIAL_DEMO_TOPICS;
+  }
 
   // Auto-connect if URL has ?token=ghp_xxx
   const urlParams = new URLSearchParams(window.location.search);
@@ -814,14 +825,31 @@ function bindEvents() {
 }
 
 // ==========================================
-// Helpers
+// Lightweight Built-in Markdown Renderer (Zero CDN Dependency)
 // ==========================================
 function renderMarkdown(text) {
   if (!text) return '';
-  if (typeof marked !== 'undefined') {
-    return marked.parse(text, { breaks: true });
-  }
-  return escapeHtml(text).replace(/\n/g, '<br>');
+  let html = escapeHtml(text);
+
+  // Code blocks ```code```
+  html = html.replace(/```([\s\S]*?)```/g, (_, code) => `<pre><code>${code.trim()}</code></pre>`);
+  // Inline code `code`
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Headings
+  html = html.replace(/^### (.*$)/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.*$)/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.*$)/gm, '<h1>$1</h1>');
+  // Bold & Italic
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  // Blockquote
+  html = html.replace(/^&gt; (.*$)/gm, '<blockquote>$1</blockquote>');
+  // Links [text](url)
+  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  // Line breaks
+  html = html.replace(/\n/g, '<br>');
+
+  return html;
 }
 
 function escapeHtml(str) {
@@ -843,3 +871,6 @@ function formatTimeAgo(isoString) {
 }
 
 document.addEventListener('DOMContentLoaded', init);
+if (document.readyState !== 'loading') {
+  init();
+}
