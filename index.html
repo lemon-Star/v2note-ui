@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>V2Note - 个人极简知识库 & 记录</title>
+  <link rel="stylesheet" href="style.css">
+  <!-- Marked.js for Markdown rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+  <!-- Top Header -->
+  <header class="top-bar">
+    <div class="container top-bar-inner">
+      <div class="brand" id="brand-logo">
+        <span class="brand-v2">V2</span><span class="brand-note">NOTE</span>
+      </div>
+      <div class="search-box">
+        <input type="text" id="search-input" placeholder="搜索帖子标题或内容..." />
+      </div>
+      <nav class="top-actions">
+        <span id="sync-status" class="sync-badge" title="当前数据源模式">本地演示模式</span>
+        <a href="javascript:void(0)" id="btn-new-topic" class="top-link primary-link">+ 新建帖子</a>
+        <a href="javascript:void(0)" id="btn-settings" class="top-link">GitHub 设置</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Main Content Layout -->
+  <div class="container main-layout">
+    <!-- Left / Center Main Column -->
+    <main class="main-column">
+      
+      <!-- LIST VIEW -->
+      <div id="view-list" class="box">
+        <!-- Primary Tabs (Categories) -->
+        <div class="tabs-bar" id="category-tabs">
+          <!-- Rendered by JS -->
+        </div>
+        <!-- Secondary Sub-bar -->
+        <div class="sub-tabs-bar">
+          <div class="sub-tabs-left" id="current-category-desc">
+            全部主题列表
+          </div>
+          <div class="sub-tabs-right">
+            <a href="javascript:void(0)" id="btn-refresh" class="sub-link">↻ 刷新数据</a>
+          </div>
+        </div>
+
+        <!-- Topic Items List -->
+        <div id="topic-list" class="topic-list">
+          <!-- Rendered by JS -->
+        </div>
+      </div>
+
+      <!-- DETAIL VIEW (Topic + Records/Replies) -->
+      <div id="view-detail" class="hidden">
+        <!-- Topic Main Box -->
+        <div class="box topic-box">
+          <div class="topic-header">
+            <div class="topic-breadcrumb">
+              <a href="javascript:void(0)" id="btn-back-list">V2NOTE</a>
+              <span class="chevron">&nbsp;›&nbsp;</span>
+              <span id="detail-category-tag" class="node-tag">分类</span>
+            </div>
+            <h1 id="detail-title" class="topic-title">帖子标题</h1>
+            <div class="topic-meta">
+              <span id="detail-author" class="meta-author">owner</span> · 
+              <span id="detail-time">发布于 刚刚</span> · 
+              <span id="detail-records-count">0 条记录</span>
+              <a href="javascript:void(0)" id="btn-open-github" class="meta-action hidden" target="_blank">在 GitHub 查看 ↗</a>
+              <a href="javascript:void(0)" id="btn-delete-topic" class="meta-action danger-text">删除</a>
+            </div>
+          </div>
+          <div id="detail-body" class="topic-content markdown-body">
+            <!-- Main post content -->
+          </div>
+        </div>
+
+        <!-- Records / Subtle & Replies Box -->
+        <div class="box replies-box" id="replies-container">
+          <div class="box-header">
+            <span id="replies-header-text">共 0 条后续记录</span>
+            <span class="box-header-right">按时间正序排列</span>
+          </div>
+          <div id="replies-list">
+            <!-- Rendered by JS -->
+          </div>
+        </div>
+
+        <!-- Add New Record Box -->
+        <div class="box reply-form-box">
+          <div class="box-header">
+            <span>添加一条新记录（附言 / 进展跟进）</span>
+            <span class="box-header-right">支持 Markdown 语法</span>
+          </div>
+          <div class="form-body">
+            <textarea id="reply-input" rows="5" placeholder="记录新的进展、排错过程、笔记补充或答案... (Ctrl+Enter 快捷提交)"></textarea>
+            <div class="form-actions">
+              <span class="form-tip">每一条记录都会作为独立楼层带时间戳保存</span>
+              <button id="btn-submit-reply" class="btn btn-primary">追加记录</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </main>
+
+    <!-- Right Sidebar -->
+    <aside class="side-column">
+      <!-- Profile / Repo Card -->
+      <div class="box side-box">
+        <div class="profile-header">
+          <div class="avatar" id="profile-avatar">V2</div>
+          <div class="profile-info">
+            <div class="profile-name" id="profile-name">我的私有知识库</div>
+            <div class="profile-tagline" id="profile-repo">未绑定 GitHub 私有库</div>
+          </div>
+        </div>
+        <div class="profile-stats">
+          <div class="stat-item">
+            <span class="stat-num" id="stat-categories">0</span>
+            <span class="stat-label">大类节点</span>
+          </div>
+          <div class="stat-divider"></div>
+          <div class="stat-item">
+            <span class="stat-num" id="stat-topics">0</span>
+            <span class="stat-label">主题帖子</span>
+          </div>
+          <div class="stat-divider"></div>
+          <div class="stat-item">
+            <span class="stat-num" id="stat-records">0</span>
+            <span class="stat-label">追加记录</span>
+          </div>
+        </div>
+        <div class="side-action-bar">
+          <button id="btn-side-new" class="btn btn-block">+ 撰写新帖子</button>
+        </div>
+      </div>
+
+      <!-- Category Management Box -->
+      <div class="box side-box">
+        <div class="box-header">
+          <span>分类节点 (Tabs)</span>
+          <a href="javascript:void(0)" id="btn-add-category" class="box-header-link">+ 新增分类</a>
+        </div>
+        <div class="node-cloud" id="side-node-list">
+          <!-- Rendered by JS -->
+        </div>
+      </div>
+
+      <!-- Quick Tips Box -->
+      <div class="box side-box">
+        <div class="box-header">使用说明 (路线 2: GitHub 私有库)</div>
+        <div class="side-tips">
+          <p>1. <b>大类</b> = 顶部 Tab（对应 GitHub Issue 的 <code>Label</code>）。</p>
+          <p>2. <b>帖子</b> = 每个分类下的主贴（对应 <code>Issue</code>）。</p>
+          <p>3. <b>记录</b> = 帖子内无限追加的楼层（对应 <code>Issue Comments</code>）。</p>
+          <p>4. 点击右上角 <b>GitHub 设置</b> 填入你的私有仓库与 Token，即可实现全端私有同步。</p>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- MODAL: New Topic -->
+  <div id="modal-new-topic" class="modal-overlay hidden">
+    <div class="modal-box">
+      <div class="box-header">
+        <span>创建新帖子</span>
+        <a href="javascript:void(0)" class="modal-close" data-close="modal-new-topic">✕</a>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>所属大类 (Tab)</label>
+          <select id="new-topic-category" class="form-control"></select>
+        </div>
+        <div class="form-group">
+          <label>帖子标题</label>
+          <input type="text" id="new-topic-title" class="form-control" placeholder="请输入简明扼要的标题..." />
+        </div>
+        <div class="form-group">
+          <label>初始正文 / 背景描述 (支持 Markdown)</label>
+          <textarea id="new-topic-body" rows="7" class="form-control" placeholder="写下你的问题、项目初始记录或思考... 后续进展可以在帖子下方随时盖楼追加。"></textarea>
+        </div>
+        <div class="form-actions">
+          <button class="btn" data-close="modal-new-topic">取消</button>
+          <button id="btn-create-topic-confirm" class="btn btn-primary">发布帖子</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: GitHub Private Repo Settings -->
+  <div id="modal-settings" class="modal-overlay hidden">
+    <div class="modal-box">
+      <div class="box-header">
+        <span>连接 GitHub 私有仓库 (Private Repo)</span>
+        <a href="javascript:void(0)" class="modal-close" data-close="modal-settings">✕</a>
+      </div>
+      <div class="modal-body">
+        <div class="alert-info">
+          配置后，所有帖子和追加记录将直接读写你指定的 <b>GitHub Private 仓库 Issues</b>。由于是私有仓库，外界任何人都无法访问，只有持有 Token 的你能在页面上读写。
+        </div>
+        <div class="form-group">
+          <label>GitHub 用户名 (Owner)</label>
+          <input type="text" id="cfg-owner" class="form-control" value="lemon-Star" placeholder="例如: lemon-Star" />
+        </div>
+        <div class="form-group">
+          <label>私有仓库名 (Private Repo Name)</label>
+          <input type="text" id="cfg-repo" class="form-control" value="v2note" placeholder="例如: v2note" />
+        </div>
+        <div class="form-group">
+          <label>Personal Access Token (PAT)</label>
+          <input type="password" id="cfg-token" class="form-control" placeholder="ghp_xxxxxxxx 或 github_pat_xxxxxxxx (需勾选 repo / issues 权限)" />
+          <div class="field-help">Token 仅保存在你当前浏览器的 <code>localStorage</code> 中，不会上传到任何第三方服务器。</div>
+        </div>
+        <div class="form-actions">
+          <button id="btn-clear-settings" class="btn danger-text">切回本地模式</button>
+          <div>
+            <button class="btn" data-close="modal-settings">取消</button>
+            <button id="btn-save-settings" class="btn btn-primary">保存并同步 GitHub</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="footer">
+    <div class="container">
+      <span>V2NOTE · 仿 V2EX 极简个人知识库</span> · 
+      <span>支持本地存储 & GitHub Private Issues 驱动</span>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
