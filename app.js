@@ -130,9 +130,21 @@ function isGitHubConfigured() {
 // ==========================================
 // GitHub Private Repo API Integration (Route 2)
 // ==========================================
+function parseNextLink(linkHeader) {
+  if (!linkHeader) return null;
+  const parts = linkHeader.split(',');
+  for (const part of parts) {
+    const match = part.match(/<([^>]+)>;\s*rel="next"/);
+    if (match) return match[1];
+  }
+  return null;
+}
+
 async function ghFetch(endpoint, options = {}) {
   const { owner, repo, token } = state.ghConfig;
-  const url = `https://api.github.com/repos/${owner}/${repo}${endpoint}`;
+  const url = /^https?:\/\//i.test(endpoint)
+    ? endpoint
+    : `https://api.github.com/repos/${owner}/${repo}${endpoint}`;
   const res = await fetch(url, {
     ...options,
     headers: {
@@ -149,15 +161,42 @@ async function ghFetch(endpoint, options = {}) {
   return res.status === 204 ? null : res.json();
 }
 
+async function ghFetchAllPages(endpoint, maxPages = 20) {
+  const { owner, repo, token } = state.ghConfig;
+  const sep = endpoint.includes('?') ? '&' : '?';
+  let nextUrl = `https://api.github.com/repos/${owner}/${repo}${endpoint}${sep}per_page=100`;
+  const allItems = [];
+
+  for (let page = 0; page < maxPages && nextUrl; page++) {
+    const res = await fetch(nextUrl, {
+      headers: {
+        'Accept': 'application/vnd.github+json',
+        'Authorization': `Bearer ${token}`,
+        'X-GitHub-Api-Version': '2022-11-28'
+      }
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.message || `GitHub API Error (${res.status})`);
+    }
+    const items = await res.json();
+    if (!Array.isArray(items) || items.length === 0) break;
+    allItems.push(...items);
+    nextUrl = parseNextLink(res.headers.get('Link'));
+  }
+
+  return allItems;
+}
+
 async function syncFromGitHub() {
   if (!isGitHubConfigured()) return;
   const statusEl = document.getElementById('sync-status');
   statusEl.textContent = '同步 GitHub 中...';
 
   try {
-    // 1. Fetch all labels from repo as categories
+    // 1. Fetch all labels from repo as categories (paginated)
     const defaultGhLabels = ['bug', 'documentation', 'duplicate', 'enhancement', 'good first issue', 'help wanted', 'invalid', 'question', 'wontfix'];
-    const labels = await ghFetch('/labels?per_page=100');
+    const labels = await ghFetchAllPages('/labels');
     const customLabels = labels.filter(lb => !defaultGhLabels.includes(lb.name.toLowerCase()));
     if (customLabels.length > 0) {
       state.categories = [
@@ -170,9 +209,29 @@ async function syncFromGitHub() {
       ];
     }
 
-    // 2. Fetch issues (excluding pull requests)
-    const issues = await ghFetch('/issues?state=open&per_page=100&sort=updated');
+    // 2. Fetch all open issues (excluding pull requests, paginated)
+    const issues = await ghFetchAllPages('/issues?state=open&sort=updated');
     const pureIssues = issues.filter(item => !item.pull_request);
+
+    // 3. Bulk-fetch all repo issue comments so homepage search covers every floor record
+    const commentsByIssue = new Map();
+    try {
+      const allComments = await ghFetchAllPages('/issues/comments?sort=created&direction=asc');
+      allComments.forEach(c => {
+        const match = c.issue_url && c.issue_url.match(/\/issues\/(\d+)$/);
+        if (!match) return;
+        const issueNum = Number(match[1]);
+        if (!commentsByIssue.has(issueNum)) commentsByIssue.set(issueNum, []);
+        commentsByIssue.get(issueNum).push({
+          id: c.id,
+          createdAt: c.created_at,
+          body: c.body || '',
+          author: c.user ? c.user.login : 'me'
+        });
+      });
+    } catch (commentErr) {
+      console.warn('Bulk comments sync skipped, will lazy-load per topic:', commentErr.message);
+    }
 
     // Extract labels into categories dynamically
     const catSet = new Set(state.categories.map(c => c.id));
@@ -188,6 +247,7 @@ async function syncFromGitHub() {
     // Convert GitHub Issues to Topics
     state.topics = pureIssues.map(iss => {
       const cat = iss.labels.length > 0 ? iss.labels[0].name : '未分类';
+      const syncedRecords = commentsByIssue.get(iss.number) || [];
       return {
         id: iss.number,
         ghNumber: iss.number,
@@ -198,8 +258,8 @@ async function syncFromGitHub() {
         createdAt: iss.created_at,
         updatedAt: iss.updated_at,
         body: iss.body || '',
-        commentsCount: iss.comments,
-        records: [] // Loaded on detail click
+        commentsCount: syncedRecords.length || iss.comments,
+        records: syncedRecords
       };
     });
 
@@ -217,14 +277,16 @@ async function syncFromGitHub() {
 async function loadTopicRecordsFromGitHub(topic) {
   if (!isGitHubConfigured() || !topic.ghNumber) return;
   try {
-    const comments = await ghFetch(`/issues/${topic.ghNumber}/comments?per_page=100`);
+    const comments = await ghFetchAllPages(`/issues/${topic.ghNumber}/comments`);
     topic.records = comments.map(c => ({
       id: c.id,
       createdAt: c.created_at,
-      body: c.body,
-      author: c.user.login
+      body: c.body || '',
+      author: c.user ? c.user.login : 'me'
     }));
     topic.commentsCount = topic.records.length;
+    saveLocalData();
+    renderSidebar();
     renderDetailView();
   } catch (err) {
     console.error('Failed to fetch issue comments:', err);
@@ -264,7 +326,10 @@ function renderSyncStatus() {
 
 function renderSidebar() {
   const realCategories = state.categories.filter(c => c.id !== 'all');
-  const totalRecords = state.topics.reduce((acc, t) => acc + (t.records ? t.records.length : (t.commentsCount || 0)), 0);
+  const totalRecords = state.topics.reduce(
+    (acc, t) => acc + ((t.records && t.records.length > 0) ? t.records.length : (t.commentsCount || 0)),
+    0
+  );
 
   document.getElementById('stat-categories').textContent = realCategories.length;
   document.getElementById('stat-topics').textContent = state.topics.length;
@@ -521,6 +586,7 @@ function bindEvents() {
 
       state.editingTarget = { type: 'record', recordId: rec.id };
       document.getElementById('edit-modal-header').textContent = `修改 #${floor} 楼层记录`;
+      document.getElementById('edit-category-group').classList.add('hidden');
       document.getElementById('edit-title-group').classList.add('hidden');
       document.getElementById('edit-content-body').value = rec.body || '';
       document.getElementById('modal-edit-content').classList.remove('hidden');
@@ -630,6 +696,9 @@ function bindEvents() {
       }
 
       state.categories = state.categories.filter(c => c.id !== catName);
+      state.topics.forEach(t => {
+        if (t.category === catName) t.category = '未分类';
+      });
       if (state.activeCategory === catName) state.activeCategory = 'all';
       saveLocalData();
       renderCategoryManagerModal();
@@ -850,14 +919,29 @@ function bindEvents() {
     }
   });
 
-  // Edit Main Topic (Title & Body)
+  // Edit Main Topic (Category, Title & Body)
   document.getElementById('btn-edit-topic').addEventListener('click', () => {
     const topic = state.topics.find(t => String(t.id) === String(state.activeTopicId));
     if (!topic) return;
 
     state.editingTarget = { type: 'topic', topicId: topic.id };
-    document.getElementById('edit-modal-header').textContent = '修改主贴标题与内容';
+    document.getElementById('edit-modal-header').textContent = '修改主贴分类、标题与内容';
+    document.getElementById('edit-category-group').classList.remove('hidden');
     document.getElementById('edit-title-group').classList.remove('hidden');
+
+    const catSelect = document.getElementById('edit-content-category');
+    const realCats = state.categories.filter(c => c.id !== 'all');
+    const options = [...realCats];
+    if (topic.category && !options.some(c => c.id === topic.category)) {
+      options.unshift({ id: topic.category, name: topic.category });
+    }
+    if (options.length === 0) {
+      options.push({ id: '未分类', name: '未分类' });
+    }
+    catSelect.innerHTML = options
+      .map(c => `<option value="${escapeHtml(c.id)}" ${topic.category === c.id ? 'selected' : ''}>${escapeHtml(c.name)}</option>`)
+      .join('');
+
     document.getElementById('edit-content-title').value = topic.title || '';
     document.getElementById('edit-content-body').value = topic.body || '';
     document.getElementById('modal-edit-content').classList.remove('hidden');
@@ -880,16 +964,19 @@ function bindEvents() {
     try {
       if (target.type === 'topic') {
         const newTitle = document.getElementById('edit-content-title').value.trim();
+        const newCategory = document.getElementById('edit-content-category').value || topic.category || '未分类';
         if (!newTitle) {
           alert('帖子标题不能为空');
           return;
         }
         if (isGitHubConfigured() && topic.ghNumber) {
+          const labelsPayload = (newCategory && newCategory !== '未分类') ? [newCategory] : [];
           await ghFetch(`/issues/${topic.ghNumber}`, {
             method: 'PATCH',
-            body: JSON.stringify({ title: newTitle, body: newBody })
+            body: JSON.stringify({ title: newTitle, body: newBody, labels: labelsPayload })
           });
         }
+        topic.category = newCategory;
         topic.title = newTitle;
         topic.body = newBody;
         topic.updatedAt = new Date().toISOString();
@@ -989,29 +1076,51 @@ function makeCodeBlockHtml(rawCode, lang = 'bash') {
 
 function autoWrapUnfencedCommands(text) {
   // Automatically detect contiguous shell command blocks even if user forgot ``` fences
+  // Avoid mistaking standalone Markdown H1 headings (`# Title`) for shell comments.
   const lines = text.split('\n');
   const result = [];
   let cmdBuffer = [];
+  let bufferHasRealCommand = false;
 
-  const isCommandLine = (line) => {
+  const isRealCommandLine = (line) => {
     const t = line.trim();
     if (!t) return false;
     return (
-      /^(\.\/|\/|cd\s|export\s|mkdir\s|scp\s|ssh\s|curl\s|wget\s|git\s|docker\s|python|pip\s|npm\s|node\s|sudo\s|cat\s|ls\s|rm\s|cp\s|mv\s|chmod\s|chown\s|systemctl\s|journalctl\s|nvidia-smi|--[a-zA-Z0-9_-]+)/.test(t) ||
-      /^[a-zA-Z0-9_]+\s*=\s*\S+/.test(t) ||
-      /^#\s+/.test(t) ||
+      /^(\.\/|\/[a-zA-Z0-9._-]|cd\s|export\s|mkdir\s|scp\s|ssh\s|curl\s|wget\s|git\s|docker\s|python|pip\s|npm\s|npx\s|pnpm\s|yarn\s|node\s|brew\s|sudo\s|cat\s|ls\s|rm\s|cp\s|mv\s|chmod\s|chown\s|systemctl\s|journalctl\s|nvidia-smi|--[a-zA-Z0-9_-]+)/.test(t) ||
+      /^[A-Z_][A-Z0-9_]*=\S+/.test(t) ||
+      /^[a-zA-Z0-9_]+\s*=\s*["'/$~].*/.test(t) ||
       t.endsWith('\\')
     );
+  };
+
+  const isHashCommentLine = (line) => /^#\s+/.test(line.trim());
+
+  const hasFollowingCommandInParagraph = (startIdx) => {
+    for (let j = startIdx + 1; j < lines.length; j++) {
+      const nextLine = lines[j];
+      if (nextLine.trim() === '' || nextLine.trim().startsWith('```')) return false;
+      if (isRealCommandLine(nextLine)) return true;
+      if (!isHashCommentLine(nextLine)) return false;
+    }
+    return false;
+  };
+
+  const flushBuffer = () => {
+    if (cmdBuffer.length === 0) return;
+    if (bufferHasRealCommand) {
+      result.push('```bash\n' + cmdBuffer.join('\n') + '\n```');
+    } else {
+      result.push(...cmdBuffer);
+    }
+    cmdBuffer = [];
+    bufferHasRealCommand = false;
   };
 
   let insideFence = false;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (line.trim().startsWith('```')) {
-      if (cmdBuffer.length > 0) {
-        result.push('```bash\n' + cmdBuffer.join('\n') + '\n```');
-        cmdBuffer = [];
-      }
+      flushBuffer();
       insideFence = !insideFence;
       result.push(line);
       continue;
@@ -1022,66 +1131,194 @@ function autoWrapUnfencedCommands(text) {
       continue;
     }
 
-    if (isCommandLine(line)) {
+    if (isRealCommandLine(line)) {
+      cmdBuffer.push(line);
+      bufferHasRealCommand = true;
+    } else if (isHashCommentLine(line) && (bufferHasRealCommand || hasFollowingCommandInParagraph(i))) {
       cmdBuffer.push(line);
     } else if (line.trim() === '' && cmdBuffer.length > 0) {
       // Flush each command paragraph as its own copyable block!
-      result.push('```bash\n' + cmdBuffer.join('\n') + '\n```');
-      cmdBuffer = [];
+      flushBuffer();
       result.push(line);
     } else {
-      if (cmdBuffer.length > 0) {
-        result.push('```bash\n' + cmdBuffer.join('\n') + '\n```');
-        cmdBuffer = [];
-      }
+      flushBuffer();
       result.push(line);
     }
   }
 
-  if (cmdBuffer.length > 0) {
-    result.push('```bash\n' + cmdBuffer.join('\n') + '\n```');
-  }
-
+  flushBuffer();
   return result.join('\n');
+}
+
+function makeImageHtml(src, alt = '', alreadyEscaped = false) {
+  const safeSrc = alreadyEscaped ? src.trim() : escapeHtml(src.trim());
+  const safeAlt = alreadyEscaped ? alt.trim() : escapeHtml(alt.trim());
+  return `<a href="${safeSrc}" target="_blank" rel="noopener"><img class="md-img" src="${safeSrc}" alt="${safeAlt}" loading="lazy" /></a>`;
+}
+
+function renderInlineMarkdown(escapedLine) {
+  const inlineTokens = [];
+  const stash = (html) => {
+    const idx = inlineTokens.length;
+    inlineTokens.push(html);
+    return `@@INLINE_${idx}@@`;
+  };
+
+  let s = escapedLine;
+
+  // 1. Inline code `code` (protect contents from bold/italic/url parsing)
+  s = s.replace(/`([^`]+)`/g, (_, code) => stash(`<code>${code}</code>`));
+
+  // 2. Markdown images ![alt](url)
+  s = s.replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+|data:image\/[a-zA-Z0-9.+-]+;base64,[a-zA-Z0-9+/=]+)\)/g, (_, alt, url) => {
+    return stash(makeImageHtml(url, alt, true));
+  });
+
+  // 3. Markdown links [text](url)
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, url) => {
+    return stash(`<a href="${url}" target="_blank" rel="noopener">${label}</a>`);
+  });
+
+  // 4. Bare URLs
+  s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, (_, prefix, url) => {
+    return `${prefix}${stash(`<a href="${url}" target="_blank" rel="noopener">${url}</a>`)}`;
+  });
+
+  // 5. Bold, Strikethrough, Italic
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+  s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
+
+  // 6. Restore stashed inline HTML
+  return s.replace(/@@INLINE_(\d+)@@/g, (_, idx) => inlineTokens[Number(idx)]);
 }
 
 function renderMarkdown(text) {
   if (!text) return '';
 
   // 1. Pre-process: auto-wrap shell commands if user pasted without ```
-  const preprocessed = autoWrapUnfencedCommands(text);
+  const normalized = text.replace(/\r\n/g, '\n');
+  const preprocessed = autoWrapUnfencedCommands(normalized);
 
-  // 2. Extract fenced code blocks ```lang ... ``` into placeholders first
-  const codeBlocks = [];
+  // 2. Extract fenced code blocks ```lang ... ``` and GitHub pasted <img ...> tags into placeholders first
+  const blocks = [];
+  const stashBlock = (html) => {
+    const idx = blocks.length;
+    blocks.push(html);
+    return `@@BLOCK_${idx}@@`;
+  };
+
   let processed = preprocessed.replace(/```([a-zA-Z0-9_-]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-    const idx = codeBlocks.length;
-    codeBlocks.push(makeCodeBlockHtml(code, lang || 'bash'));
-    return `@@CODE_BLOCK_${idx}@@`;
+    return stashBlock(makeCodeBlockHtml(code, lang || 'bash'));
   });
 
-  // 3. Escape remaining HTML
-  let html = escapeHtml(processed);
+  // Safely support raw GitHub pasted <img ... src="https://..." ...> tags
+  processed = processed.replace(/<img\b[^>]*>/gi, (tag) => {
+    const srcMatch = tag.match(/\bsrc\s*=\s*["'](https?:\/\/[^"']+)["']/i);
+    if (!srcMatch) return tag;
+    const altMatch = tag.match(/\balt\s*=\s*["']([^"']*)["']/i);
+    return stashBlock(makeImageHtml(srcMatch[1], altMatch ? altMatch[1] : ''));
+  });
 
-  // 4. Inline code `code`
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-  // Headings
-  html = html.replace(/^### (.*$)/gm, '<h3>$1</h3>');
-  html = html.replace(/^## (.*$)/gm, '<h2>$1</h2>');
-  html = html.replace(/^# (.*$)/gm, '<h1>$1</h1>');
-  // Bold & Italic
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  // Blockquote
-  html = html.replace(/^&gt; (.*$)/gm, '<blockquote>$1</blockquote>');
-  // Markdown Links [text](url) & Auto bare URLs
-  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-  html = html.replace(/(^|[^"'>])(https?:\/\/[^\s<]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
-  // Line breaks
-  html = html.replace(/\n/g, '<br>');
+  // 3. Line-by-line block parser (headings, hr, lists, blockquotes, paragraphs)
+  const lines = escapeHtml(processed).split('\n');
+  const out = [];
+  let listType = null; // 'ul' | 'ol' | null
 
-  // 5. Restore code blocks
-  html = html.replace(/@@CODE_BLOCK_(\d+)@@/g, (_, idx) => codeBlocks[Number(idx)]);
+  const closeList = () => {
+    if (listType) {
+      out.push(`</${listType}>`);
+      listType = null;
+    }
+  };
 
-  return html;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (/^@@BLOCK_\d+@@$/.test(trimmed)) {
+      closeList();
+      out.push(trimmed);
+      continue;
+    }
+
+    if (trimmed === '') {
+      closeList();
+      if (out.length > 0 && out[out.length - 1] !== '<br>') {
+        out.push('<br>');
+      }
+      continue;
+    }
+
+    // Horizontal rule
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+      closeList();
+      out.push('<hr>');
+      continue;
+    }
+
+    // Headings h1-h4
+    const headingMatch = line.match(/^(#{1,4})\s+(.*)$/);
+    if (headingMatch) {
+      closeList();
+      const level = headingMatch[1].length;
+      out.push(`<h${level}>${renderInlineMarkdown(headingMatch[2])}</h${level}>`);
+      continue;
+    }
+
+    // Blockquote
+    const quoteMatch = line.match(/^&gt;\s?(.*)$/);
+    if (quoteMatch) {
+      closeList();
+      out.push(`<blockquote>${renderInlineMarkdown(quoteMatch[1])}</blockquote>`);
+      continue;
+    }
+
+    // Unordered list item (- or * followed by space)
+    const ulMatch = line.match(/^\s*[-*]\s+(.*)$/);
+    if (ulMatch) {
+      if (listType !== 'ul') {
+        closeList();
+        out.push('<ul>');
+        listType = 'ul';
+      }
+      out.push(`<li>${renderInlineMarkdown(ulMatch[1])}</li>`);
+      continue;
+    }
+
+    // Ordered list item (1. followed by space)
+    const olMatch = line.match(/^\s*\d+\.\s+(.*)$/);
+    if (olMatch) {
+      if (listType !== 'ol') {
+        closeList();
+        out.push('<ol>');
+        listType = 'ol';
+      }
+      out.push(`<li>${renderInlineMarkdown(olMatch[1])}</li>`);
+      continue;
+    }
+
+    // Regular text line
+    closeList();
+    const prev = out[out.length - 1];
+    const prevIsBlock = !prev || /^(<h[1-4]>|<hr>|<blockquote>|<\/ul>|<\/ol>|<br>|@@BLOCK_\d+@@)$/.test(prev) || /<\/(h[1-4]|blockquote|ul|ol)>$/.test(prev);
+    const rendered = renderInlineMarkdown(line);
+    if (!prevIsBlock) {
+      out.push('<br>' + rendered);
+    } else {
+      out.push(rendered);
+    }
+  }
+
+  closeList();
+
+  // Remove trailing <br>
+  while (out.length > 0 && out[out.length - 1] === '<br>') {
+    out.pop();
+  }
+
+  // 4. Restore stashed code / image blocks
+  return out.join('').replace(/@@BLOCK_(\d+)@@/g, (_, idx) => blocks[Number(idx)]);
 }
 
 function escapeHtml(str) {

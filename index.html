@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>V2Note - 个人极简知识库 & 记录</title>
-  <link rel="stylesheet" href="style.css?v=4">
+  <link rel="stylesheet" href="style.css?v=5">
 </head>
 <body>
   <!-- Top Header -->
@@ -262,6 +262,10 @@
         <a href="javascript:void(0)" class="modal-close" data-close="modal-edit-content">✕</a>
       </div>
       <div class="modal-body">
+        <div class="form-group" id="edit-category-group">
+          <label>所属大类 (Tab)</label>
+          <select id="edit-content-category" class="form-control"></select>
+        </div>
         <div class="form-group" id="edit-title-group">
           <label>帖子标题</label>
           <input type="text" id="edit-content-title" class="form-control" />
@@ -288,6 +292,6 @@
     </div>
   </footer>
 
-  <script src="app.js?v=4"></script>
+  <script src="app.js?v=5"></script>
 </body>
 </html>
